@@ -23,7 +23,7 @@ jobs:
           libcairo2-dev \
           pkg-config \
           python3-dev \
-          libwebkit2gtk-4.0-dev \
+          libwebkit2gtk-4.1-dev \
           build-essential \
           libdbus-1-dev
           
@@ -83,7 +83,7 @@ jobs:
         path: dist/VPinFE-Windows.exe
 
   build-macos-x86:
-    runs-on: macos-13
+    runs-on: macos-15-intel
     steps:
     - uses: actions/checkout@v4
     
