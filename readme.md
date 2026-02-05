@@ -93,6 +93,46 @@ cd vpinfe
 pip install -r osx_requirements.txt
 ```
 
+### Windows 11
+ 
+**Requirements**
+
+* Python 3.13.12
+
+>[!CAUTION] 
+>If you use the top Button, you might download a wrong Version not working with the following Steps
+
+![image](https://github.com/user-attachments/assets/201ead7f-297f-4b2a-9bf2-f085c14feba8)
+
+![image](https://github.com/user-attachments/assets/d6815cc6-7016-4c31-9103-e4cde8956f48)
+* add Path to Enviromentvars (Win11 -> System -> Enviroment)
+* enable Script Execution in PowerShell
+![image](https://github.com/user-attachments/assets/0c09970e-0b81-422e-ab7e-c07e18d57a0c)
+
+>[!IMPORTANT]
+>Due to the Fact Script Execution is needed later on for launching VPINFE, do not disable Script Execution.
+
+* open PowerShell as Admin
+```
+git clone https://github.com/superhac/vpinfe.git
+cd vpinfe
+python -m pip install —-upgrade pip
+python -m venv venv-vpinfe --system-site-packages
+.\venv-vpinfe\scripts\Activate.ps1
+pip install pywebview screeninfo colorama requests olefile nicegui pynput
+python main.py -h
+```
+* add Shortcut to this Script on the Desktop
+```
+cd c:\vpinfe
+.\venv-vpinfe\scripts\Activate.ps1
+Python Main.py
+```
+
+>[!TIP]
+>You might have to change the "Open With" from Editor to PowerShell
+
+
 ### Setup your configuration (vpinfe.ini)
 
 VPinFE uses a platform-specific configuration directory to store its settings. On first run, VPinFE will automatically create a default `vpinfe.ini` file in the following location:
@@ -312,6 +352,12 @@ options:
 | tabletype         | If you're using a Full Single Screen or FSS set this to `fss`. Leaving it blank or any other valid will use the portrait table images. |
 | tableresolution   | You can choose `1k` or `4k` to let the system know which resolution images you want to download when building the metadata. Leaving it blank will  default to 4K images. |
 
+### [Network]
+| Key               | Description |
+| ----------------- | ------------------------------------------------------------------------- |
+| themeassetsport   | Port for the theme assets HTTP server. Default is `8000`.                 |
+| manageruiport     | Port for the Manager UI (NiceGUI) server. Default is `8001`.              |
+
 ## Table Metadata File (based on the Zero install table format)
 When you run VPinFE with the `--buildmeta` option it recursively goes through your table directory attempts to match your tables to their VPSDB id.  When matched, it will then parse the VPX for the table for more meta information and produce a `TABLE FOLDER NAME(manufactuer year).info` in that tables directory.  Heres an example for the table 1-2-3:
 
@@ -477,10 +523,18 @@ There are three server listeners started on your machine:
 | Service | Bound Address/Port | Description                                                           |
 | ------- | ---------------    | --------------------------------------------------------------------- |
 | HTTP    | 127.0.0.1:RANDOM   | PyWebView server.  Frontend UI/Themes                                 |
-| HTTP    | 127.0.0.1:8000     | Python HTTPServer. Serves tables media assets                         |
-| HTTP    | 0.0.0.0:8001       | NiceGui sever.  Handles the UI for configuration and management       | 
+| HTTP    | 127.0.0.1:8000     | Python HTTPServer. Serves tables media assets (configurable)          |
+| HTTP    | 0.0.0.0:8001       | NiceGui sever.  Handles the UI for configuration and management (configurable) |
 
 The only service that externally accessable from your machine its UI for managing it.  This is setup like this so people with cabinets can administer it remotely.
+
+The ports for the theme assets server and manager UI can be configured in your `vpinfe.ini` file under the `[Network]` section:
+
+```ini
+[Network]
+themeassetsport = 8000
+manageruiport = 8001
+```
 
 External Web Endpoints:
 - Table/VPX Configuration and Management: http://{YOUR-IP}:8001

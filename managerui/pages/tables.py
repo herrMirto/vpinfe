@@ -2,6 +2,8 @@ import os
 import configparser
 import logging
 import asyncio
+import zipfile
+import io
 from nicegui import ui, events, run, context
 from pathlib import Path
 import json
@@ -25,6 +27,24 @@ _INI_CFG = IniConfig(str(VPINFE_INI_PATH))
 
 #_vpsdb_cache: List[Dict] | None = None
 _vpsdb_cache: Optional[List[Dict]] = None
+
+def ensure_vpsdb_downloaded() -> bool:
+    """
+    Ensures vpsdb.json exists and is up-to-date.
+    Downloads it if missing or outdated.
+    Returns True if vpsdb is available, False otherwise.
+    """
+    global _vpsdb_cache
+    from common.vpsdb import VPSdb
+    try:
+        # This will automatically download if missing or outdated
+        vps = VPSdb(_INI_CFG.config['Settings']['tablerootdir'], _INI_CFG)
+        # Clear cache so it reloads fresh data
+        _vpsdb_cache = None
+        return VPSDB_JSON_PATH.exists()
+    except Exception as e:
+        logger.error(f'Failed to ensure vpsdb: {e}')
+        return VPSDB_JSON_PATH.exists()
 # Ensure only one Missing Tables dialog at a time
 _missing_tables_dialog: Optional[ui.dialog] = None
 # Cache for scanned tables data (persists across page visits)
@@ -180,6 +200,7 @@ def search_vpsdb(term: str, limit: int = 50) -> List[Dict]:
     return results
 
 ACCEPT_CRZ = ['.crz', '.cRZ', '.CRZ']  # altcolor accepted extensions (case-insensitive)
+ACCEPT_VNI = ['.vni', '.VNI', '.pal', '.PAL']  # vni accepted extensions (case-insensitive)
 
 def ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
@@ -230,13 +251,21 @@ def associate_vps_to_folder(table_folder: Path, vps_entry: Dict, download_media:
     if download_media:
         from common.vpsdb import VPSdb      # your VPSdb wrapper that has downloadMediaForTable
         vps = VPSdb(_INI_CFG.config['Settings']['tablerootdir'], _INI_CFG)
-        # Build a lightweight Table-like object for the API you expect:
-        # If your TableParser.Table has fields: tableDirName, fullPathTable, fullPathVPXfile
+        # Build a lightweight Table-like object with all attributes needed by downloadMediaForTable
         class _LightTable:
             def __init__(self, folder: Path, vpx: Path):
                 self.tableDirName = folder.name
                 self.fullPathTable = str(folder)
                 self.fullPathVPXfile = str(vpx)
+                # Media paths - set to None so downloadMediaForTable uses defaults
+                self.BGImagePath = None
+                self.DMDImagePath = None
+                self.TableImagePath = None
+                self.WheelImagePath = None
+                self.CabImagePath = None
+                self.realDMDImagePath = None
+                self.realDMDColorImagePath = None
+                self.FlyerImagePath = None
         pseudo_table = _LightTable(table_folder, vpx_file)
         vps.downloadMediaForTable(pseudo_table, vps_entry.get('id'), metaConfig=meta)
 
@@ -314,7 +343,8 @@ def parse_table_info(info_path):
 
             # Addon detection (check for directories)
             "pup_pack_exists": (Path(table_dir) / "pupvideos").is_dir(),
-            "alt_color_exists": (Path(table_dir) / "pinmame" / "altcolor").is_dir(),
+            "serum_exists": (Path(table_dir) / "serum").is_dir(),
+            "vni_exists": (Path(table_dir) / "vni").is_dir(),
             "alt_sound_exists": (Path(table_dir) / "pinmame" / "altsound").is_dir(),
 
             # VPinFE settings
@@ -482,6 +512,12 @@ def render_panel(tab=None):
             except Exception:
                 pass
             try:
+                # Ensure vpsdb.json is downloaded and up-to-date
+                if not VPSDB_JSON_PATH.exists():
+                    if not silent:
+                        ui.notify('Downloading VPSdb...', type='info')
+                    await run.io_bound(ensure_vpsdb_downloaded)
+
                 # Run blocking I/O in a separate thread to avoid freezing the UI
                 table_rows = await run.io_bound(scan_tables, silent)
                 missing_rows = await run.io_bound(scan_missing_tables)
@@ -706,6 +742,7 @@ def render_panel(tab=None):
                         dialog_state = {
                             'running': False,
                             'progress_q': Queue(),
+                            'client': context.client,  # Capture client while in UI context
                         }
 
                         with dlg, ui.card().classes('w-[550px]').style('background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);'):
@@ -757,31 +794,38 @@ def render_panel(tab=None):
                                 dialog_state['running'] = True
                                 RUNNING = True
 
-                                # Switch UI to progress mode
-                                info_container.visible = False
-                                progress_container.visible = True
-                                start_btn.visible = False
-                                cancel_btn.visible = False
+                                # Use client captured when dialog was created
+                                client = dialog_state['client']
 
-                                patch_progressbar.value = 0
-                                patch_status_label.text = "Preparing..."
-                                patch_progress_timer.active = True
+                                # Switch UI to progress mode
+                                with client:
+                                    info_container.visible = False
+                                    progress_container.visible = True
+                                    start_btn.visible = False
+                                    cancel_btn.visible = False
+
+                                    patch_progressbar.value = 0
+                                    patch_status_label.text = "Preparing..."
+                                    patch_progress_timer.active = True
 
                                 try:
                                     await run.io_bound(vpxPatches, progress_cb=patch_progress_cb)
-                                    patch_status_label.text = "Completed!"
-                                    patch_progressbar.value = 1.0
-                                    ui.notify('VPX patches applied', type='positive')
+                                    with client:
+                                        patch_status_label.text = "Completed!"
+                                        patch_progressbar.value = 1.0
+                                        ui.notify('VPX patches applied', type='positive')
 
                                     # Refresh tables silently to reflect patch_applied flag
                                     await perform_scan(silent=True)
                                 except Exception as e:
                                     logger.exception('vpxPatches failed')
-                                    patch_status_label.text = f"Error: {e}"
-                                    ui.notify(f'Error: {e}', type='negative')
+                                    with client:
+                                        patch_status_label.text = f"Error: {e}"
+                                        ui.notify(f'Error: {e}', type='negative')
                                 finally:
-                                    patch_progress_timer.active = False
-                                    close_btn.visible = True
+                                    with client:
+                                        patch_progress_timer.active = False
+                                        close_btn.visible = True
                                     dialog_state['running'] = False
                                     RUNNING = False
 
@@ -1211,7 +1255,8 @@ def open_table_dialog(row_data: dict, on_close: Optional[Callable[[], None]] = N
                 # Detected Addons row
                 addon_fields = [
                     ('pup_pack_exists', 'PUP Pack', 'video_library', 'purple'),
-                    ('alt_color_exists', 'Alt Color', 'palette', 'orange'),
+                    ('serum_exists', 'Serum', 'palette', 'orange'),
+                    ('vni_exists', 'VNI', 'palette', 'cyan'),
                     ('alt_sound_exists', 'Alt Sound', 'music_note', 'green'),
                 ]
 
@@ -1310,25 +1355,38 @@ def open_table_dialog(row_data: dict, on_close: Optional[Callable[[], None]] = N
                 rom_name = (row_data.get('rom') or '').strip()
 
                 with ui.column().classes('gap-4 p-2'):
-                    # Pupvideos uploader
+                    # Pupvideos uploader (zip file)
                     with ui.row().classes('addon-card w-full items-center justify-between'):
                         with ui.row().classes('items-center gap-3'):
                             ui.icon('video_library', size='24px').classes('text-purple-400')
                             with ui.column().classes('gap-0'):
                                 ui.label('PupVideos').classes('font-medium text-white')
-                                ui.label('Upload video files for PuP pack').classes('text-xs text-gray-400')
+                                ui.label('Upload .zip file to extract to pupvideos folder').classes('text-xs text-gray-400')
                         def on_pup_upload(e):
-                            dest = table_path / 'pupvideos' / e.name
-                            save_upload_bytes(dest, e.content)
-                            ui.notify(f'Saved: {e.name}', type='positive')
-                        ui.upload(on_upload=on_pup_upload, multiple=True).props('flat color=primary label="Upload"')
+                            ext = Path(e.name).suffix.lower()
+                            if ext != '.zip':
+                                ui.notify('Only .zip files accepted', type='negative')
+                                return
+                            # Read content from SpooledTemporaryFile if needed
+                            content = e.content.read() if hasattr(e.content, 'read') else e.content
+                            try:
+                                dest_dir = table_path / 'pupvideos'
+                                ensure_dir(dest_dir)
+                                with zipfile.ZipFile(io.BytesIO(content), 'r') as zf:
+                                    zf.extractall(dest_dir)
+                                ui.notify(f'Extracted {e.name} to pupvideos/', type='positive')
+                            except zipfile.BadZipFile:
+                                ui.notify('Invalid zip file', type='negative')
+                            except Exception as ex:
+                                ui.notify(f'Extract failed: {ex}', type='negative')
+                        ui.upload(on_upload=on_pup_upload, multiple=False).props('flat color=primary label="Upload .zip"')
 
-                    # Altcolor uploader
+                    # Serum uploader
                     with ui.row().classes('addon-card w-full items-center justify-between'):
                         with ui.row().classes('items-center gap-3'):
                             ui.icon('palette', size='24px').classes('text-orange-400')
                             with ui.column().classes('gap-0'):
-                                ui.label('AltColor').classes('font-medium text-white')
+                                ui.label('Serum').classes('font-medium text-white')
                                 ui.label('Upload .cRZ color files (requires ROM)').classes('text-xs text-gray-400')
                         def on_altcolor_upload(e):
                             if not rom_name:
@@ -1338,24 +1396,50 @@ def open_table_dialog(row_data: dict, on_close: Optional[Callable[[], None]] = N
                             if ext not in ACCEPT_CRZ:
                                 ui.notify('Only .cRZ files accepted', type='negative')
                                 return
-                            dest = table_path / 'pinmame' / 'altcolor' / rom_name / e.name
-                            save_upload_bytes(dest, e.content)
+                            dest = table_path / 'serum' / rom_name / e.name
+                            # Read content from SpooledTemporaryFile if needed
+                            content = e.content.read() if hasattr(e.content, 'read') else e.content
+                            save_upload_bytes(dest, content)
                             ui.notify(f'Saved: {e.name}', type='positive')
                         ui.upload(on_upload=on_altcolor_upload, multiple=False).props('flat color=primary label="Upload .cRZ"')
+
+                    # VNI uploader
+                    with ui.row().classes('addon-card w-full items-center justify-between'):
+                        with ui.row().classes('items-center gap-3'):
+                            ui.icon('palette', size='24px').classes('text-cyan-400')
+                            with ui.column().classes('gap-0'):
+                                ui.label('VNI').classes('font-medium text-white')
+                                ui.label('Upload .vni and .pal files (requires ROM)').classes('text-xs text-gray-400')
+                        def on_vni_upload(e):
+                            if not rom_name:
+                                ui.notify('ROM not found. Update metadata first.', type='warning')
+                                return
+                            ext = Path(e.name).suffix
+                            if ext not in ACCEPT_VNI:
+                                ui.notify('Only .vni and .pal files accepted', type='negative')
+                                return
+                            dest = table_path / 'vni' / rom_name / e.name
+                            # Read content from SpooledTemporaryFile when multiple=True
+                            content = e.content.read() if hasattr(e.content, 'read') else e.content
+                            save_upload_bytes(dest, content)
+                            ui.notify(f'Saved: {e.name}', type='positive')
+                        ui.upload(on_upload=on_vni_upload, multiple=True).props('flat color=primary label="Upload .vni/.pal"')
 
                     # AltSound uploader
                     with ui.row().classes('addon-card w-full items-center justify-between'):
                         with ui.row().classes('items-center gap-3'):
                             ui.icon('music_note', size='24px').classes('text-green-400')
                             with ui.column().classes('gap-0'):
-                                ui.label('AltSound').classes('font-medium text-white')
+                                ui.label('Serum (AltSound)').classes('font-medium text-white')
                                 ui.label('Upload sound pack files (requires ROM)').classes('text-xs text-gray-400')
                         def on_altsound_upload(e):
                             if not rom_name:
                                 ui.notify('ROM not found. Update metadata first.', type='warning')
                                 return
                             dest = table_path / 'pinmame' / 'altsound' / rom_name / e.name
-                            save_upload_bytes(dest, e.content)
+                            # Read content from SpooledTemporaryFile if needed
+                            content = e.content.read() if hasattr(e.content, 'read') else e.content
+                            save_upload_bytes(dest, content)
                             ui.notify(f'Saved: {e.name}', type='positive')
                         ui.upload(on_upload=on_altsound_upload, multiple=True).props('flat color=primary label="Upload"')
 
@@ -1426,12 +1510,33 @@ def open_match_vps_dialog(
     refresh_missing: callback to refresh the missing list/count after success
     refresh_installed: callback to refresh the installed tables list after success
     """
-    dlg = ui.dialog().props('max-width=1080px')
-    with dlg, ui.card().classes('w-[960px] max-w-[95vw]'):
+    dlg = ui.dialog().props('max-width=1080px persistent')
+    dialog_state = {'busy': False}
+
+    with dlg, ui.card().classes('w-[960px] max-w-[95vw]').style('position: relative; overflow: hidden;'):
         ui.label(f"Match VPS ID → {missing_row['folder']}").classes('text-lg font-bold')
         ui.separator()
 
-        results_container = ui.column().classes('gap-1 w-full').style('max-height: 55vh; overflow:auto;')
+        # Disclaimer about what Associate button does
+        with ui.row().classes('w-full items-start gap-2 q-pa-sm').style('background: rgba(59, 130, 246, 0.15); border-radius: 6px; border-left: 3px solid #3b82f6;'):
+            ui.icon('info', size='sm').classes('text-blue-400')
+            ui.label(
+                'Clicking "Associate" will: rename the folder to "TABLE NAME (MANUFACTURER YEAR)" format, '
+                'create a metadata file (.info), and download media images from vpinmediadb.'
+            ).classes('text-sm text-gray-300')
+
+        results_container = ui.column().classes('gap-1 w-full q-mt-sm').style('max-height: 55vh; overflow:auto;')
+
+        # Loading overlay (hidden by default) - positioned over the entire card
+        loading_overlay = ui.element('div').style(
+            'position: absolute; top: 0; left: 0; right: 0; bottom: 0; '
+            'background: rgba(15, 23, 42, 0.95); z-index: 1000; '
+            'display: none; flex-direction: column; align-items: center; justify-content: center;'
+        )
+        with loading_overlay:
+            with ui.column().classes('items-center justify-center gap-4 w-full'):
+                ui.spinner('dots', size='xl', color='blue')
+                loading_label = ui.label('Downloading media...').classes('text-white text-lg text-center')
 
         def render_results(items: List[Dict]):
             results_container.clear()
@@ -1446,12 +1551,53 @@ def open_match_vps_dialog(
                 year = it.get('year') or ''
                 vid = it.get('id') or ''
                 with results_container:
-                    with ui.row().classes('justify-between items-center w-full q-py-xs border-b'):
-                        ui.label(f"{name}  —  {manuf}  —  {year}  (ID: {vid})").classes('text-sm')
-                        def _on_assoc(it=it):
+                    with ui.row().classes('items-center w-full q-py-xs border-b gap-2').style('flex-wrap: nowrap;'):
+                        ui.label(f"{name} — {manuf} — {year} (ID: {vid})").classes('text-sm').style('flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;')
+
+                        async def _on_assoc(it=it, vid=vid):
+                            if dialog_state['busy']:
+                                return
+                            dialog_state['busy'] = True
+
+                            # Show loading overlay
+                            loading_overlay.style(add='display: flex;', remove='display: none;')
+                            loading_label.set_text('Renaming folder...')
+
                             try:
-                                associate_vps_to_folder(Path(missing_row['path']), it, download_media=False)
-                                ui.notify(f"meta.ini created for '{missing_row['folder']}'", type='positive')
+                                old_path = Path(missing_row['path'])
+                                # Build new folder name: TABLE_NAME (MANUFACTURER YEAR)
+                                new_name = it.get('name', '')
+                                new_manuf = it.get('manufacturer') or it.get('mfg') or ''
+                                new_year = it.get('year') or ''
+                                if new_manuf and new_year:
+                                    new_folder_name = f"{new_name} ({new_manuf} {new_year})"
+                                elif new_manuf:
+                                    new_folder_name = f"{new_name} ({new_manuf})"
+                                elif new_year:
+                                    new_folder_name = f"{new_name} ({new_year})"
+                                else:
+                                    new_folder_name = new_name
+                                # Sanitize folder name (remove invalid characters)
+                                new_folder_name = "".join(c for c in new_folder_name if c not in '<>:"/\\|?*')
+                                new_path = old_path.parent / new_folder_name
+
+                                # Rename folder if the name is different
+                                if old_path != new_path:
+                                    if new_path.exists():
+                                        ui.notify(f"Cannot rename: folder '{new_folder_name}' already exists", type='negative')
+                                        loading_overlay.style(add='display: none;', remove='display: flex;')
+                                        dialog_state['busy'] = False
+                                        return
+                                    old_path.rename(new_path)
+                                    folder_path = new_path
+                                else:
+                                    folder_path = old_path
+
+                                # Update loading message and run download in background
+                                loading_label.set_text('Creating metadata and downloading media...')
+                                await run.io_bound(associate_vps_to_folder, folder_path, it, True)
+
+                                ui.notify(f"Associated with VPS ID '{vid}' and downloaded media", type='positive')
                                 dlg.close()
                                 if callable(refresh_missing):
                                     refresh_missing()
@@ -1459,8 +1605,11 @@ def open_match_vps_dialog(
                                     refresh_installed()
                             except Exception as ex:
                                 logger.exception('Association failed')
-                                ui.notify(f'Failed creating meta.ini: {ex}', type='negative')
-                        ui.button('Associate', on_click=_on_assoc).props('color=primary')
+                                ui.notify(f'Failed: {ex}', type='negative')
+                                loading_overlay.style(add='display: none;', remove='display: flex;')
+                                dialog_state['busy'] = False
+
+                        ui.button('Associate', on_click=_on_assoc).props('color=primary').style('flex-shrink: 0;')
 
         # Pre-fill the search with folder name for convenience
         initial_term = missing_row['folder']
