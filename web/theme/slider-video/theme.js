@@ -277,11 +277,40 @@ function updateCardContent(card, meta, tableIndex) {
     const info = tableData.Info || {};
     const vpx = tableData.VPXFile || {};
 
-    // --- Left side: Rotated playfield image ---
-    const preview = document.createElement('img');
-    preview.className = 'preview';
-    preview.src = vpin.getImageURL(tableIndex, 'table');
-    card.appendChild(preview);
+    // --- Left side: Rotated playfield video (falls back to image) ---
+    const tableObj = vpin.tableData[tableIndex];
+    const rawVideoPath = tableObj ? tableObj.TableVideoPath : null;
+    const videoUrl = vpin.getVideoURL(tableIndex, 'table');
+    const imageUrl = vpin.getImageURL(tableIndex, 'table');
+
+    vpin.call("console_out", `[slider-video] rawVideoPath=${rawVideoPath}, videoUrl=${videoUrl}, imageUrl=${imageUrl}`);
+
+    if (videoUrl && !videoUrl.includes('file_missing')) {
+        vpin.call("console_out", `[slider-video] Creating VIDEO element with src=${videoUrl}`);
+        const preview = document.createElement('video');
+        preview.className = 'preview';
+        preview.poster = imageUrl;  // gives stable dimensions while video loads
+        preview.src = videoUrl;
+        preview.autoplay = true;
+        preview.loop = true;
+        preview.muted = true;
+        preview.playsInline = true;
+        // Fall back to image if video fails to load
+        preview.onerror = (e) => {
+            vpin.call("console_out", `[slider-video] Video onerror fired: ${e.type}`);
+            const fallback = document.createElement('img');
+            fallback.className = 'preview';
+            fallback.src = imageUrl;
+            preview.replaceWith(fallback);
+        };
+        card.appendChild(preview);
+    } else {
+        vpin.call("console_out", `[slider-video] No video, falling back to IMAGE`);
+        const preview = document.createElement('img');
+        preview.className = 'preview';
+        preview.src = imageUrl;
+        card.appendChild(preview);
+    }
 
     // --- Right side: Text container ---
     const textContainer = document.createElement('div');
