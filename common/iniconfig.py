@@ -41,6 +41,15 @@ class IniConfig:
 				'themeassetsport': '8000',
 				'manageruiport': '8001',
 				},
+			'Leaderboard': {
+				'enabled': '0',
+				'api_url': '',
+				'api_key': '',
+				'machine_id': '',
+				'score_server_host': 'localhost',
+				'score_server_port': '3131',
+				'send_mode': 'manual'
+				},
 		}
 
 		self.config = configparser.ConfigParser()

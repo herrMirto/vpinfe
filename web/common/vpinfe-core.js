@@ -191,12 +191,97 @@ class VPinFECore {
       await this.#handleTableDataChange(message);
     }
 
+    // Handle ScoreNotification events (toast notifications)
+    if (message.type === "ScoreNotification") {
+      this.#showToastNotification(message.title, message.message);
+    }
+
     // Call any custom handlers registered by the theme
     if (this.eventHandlers[message.type]) {
       for (const handler of this.eventHandlers[message.type]) {
         await handler(message);
       }
     }
+  }
+
+  // Show a toast notification overlay
+  #showToastNotification(title, message) {
+    // Create or get toast container
+    let toastContainer = document.getElementById('vpinfe-toast-container');
+    if (!toastContainer) {
+      toastContainer = document.createElement('div');
+      toastContainer.id = 'vpinfe-toast-container';
+      toastContainer.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        z-index: 99999;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        pointer-events: none;
+      `;
+      document.body.appendChild(toastContainer);
+    }
+
+    // Create toast element
+    const toast = document.createElement('div');
+    toast.style.cssText = `
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      border: 2px solid #00d4ff;
+      border-radius: 12px;
+      padding: 16px 20px;
+      min-width: 280px;
+      max-width: 400px;
+      box-shadow: 0 8px 32px rgba(0, 212, 255, 0.3), 0 0 20px rgba(0, 212, 255, 0.1);
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      color: white;
+      opacity: 0;
+      transform: translateX(100%);
+      transition: all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+      pointer-events: auto;
+    `;
+
+    // Toast title
+    const titleEl = document.createElement('div');
+    titleEl.style.cssText = `
+      font-size: 16px;
+      font-weight: bold;
+      color: #00d4ff;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    `;
+    titleEl.textContent = title;
+
+    // Toast message
+    const messageEl = document.createElement('div');
+    messageEl.style.cssText = `
+      font-size: 14px;
+      color: #e0e0e0;
+      line-height: 1.4;
+      white-space: pre-line;
+    `;
+    messageEl.textContent = message;
+
+    toast.appendChild(titleEl);
+    toast.appendChild(messageEl);
+    toastContainer.appendChild(toast);
+
+    // Animate in
+    requestAnimationFrame(() => {
+      toast.style.opacity = '1';
+      toast.style.transform = 'translateX(0)';
+    });
+
+    // Auto-dismiss after 5 seconds
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateX(100%)';
+      setTimeout(() => {
+        toast.remove();
+      }, 400);
+    }, 5000);
   }
 
   // Default handler for TableDataChange events

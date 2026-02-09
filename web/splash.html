@@ -32,6 +32,14 @@
   <script>
     const vpin = new VPinFECore();
     vpin.init();
+    window.vpin = vpin;
+
+    // Hook for Python events (needed for notifications during splash)
+    async function receiveEvent(message) {
+      console.log("[splash] receiveEvent:", message);
+      await vpin.handleEvent(message);
+    }
+    window.receiveEvent = receiveEvent;
 
     vpin.ready.then(async () => {
       console.log("VPinFECore is fully initialized");
