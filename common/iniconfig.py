@@ -48,7 +48,8 @@ class IniConfig:
 				'machine_id': '',
 				'score_server_host': 'localhost',
 				'score_server_port': '3131',
-				'send_mode': 'manual'
+				'send_mode': 'automatic',
+				'notificationscreenid': '0',
 				},
 		}
 

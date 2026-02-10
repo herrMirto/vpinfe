@@ -172,10 +172,33 @@ class ScoreTracker:
             return
 
         if msg_type == 'game_end':
-            if rom_name in self.game_session_data and self.game_session_data[rom_name]:
-                logger.info(f"Game ended: {rom_name}")
-                # Find the highest score from all players
-                best_score = 0
+            # Ignore plugin_unload events — the game was already ended properly
+            reason = data.get('reason', '')
+            if reason == 'plugin_unload':
+                logger.info(f"Ignoring game_end (plugin_unload) for: {rom_name}")
+                self.game_session_data.pop(rom_name, None)
+                return
+
+            logger.info(f"Game ended: {rom_name}")
+
+            # Find the highest score from all players
+            best_score = 0
+
+            # Prefer scores from the game_end payload (sent by score-server)
+            end_scores = data.get('scores', [])
+            if end_scores:
+                logger.info(f"Using scores from game_end payload ({len(end_scores)} players)")
+                for p_data in end_scores:
+                    try:
+                        raw_score = p_data.get('score', 0)
+                        score = int(str(raw_score).replace(',', '').replace('.', '').lstrip('0') or 0)
+                        if score > best_score:
+                            best_score = score
+                    except:
+                        pass
+            # Fallback: use accumulated session data (backward compatibility)
+            elif rom_name in self.game_session_data and self.game_session_data[rom_name]:
+                logger.info(f"No scores in game_end payload, using accumulated session data")
                 for player_id, p_data in self.game_session_data[rom_name].items():
                     try:
                         raw_score = p_data.get('score', 0)
@@ -184,30 +207,33 @@ class ScoreTracker:
                             best_score = score
                     except:
                         pass
+            else:
+                logger.warning(f"game_end received for {rom_name} but no scores available (not in payload, not in session)")
 
-                if best_score > 0:
-                    # Store as last score for screenshot submission
-                    self.last_score = {
-                        'rom_name': rom_name,
-                        'score': best_score,
-                        'timestamp': datetime.now()
-                    }
-                    logger.info(f"Last score updated: {rom_name} - {best_score:,}")
+            if best_score > 0:
+                # Store as last score for screenshot submission
+                self.last_score = {
+                    'rom_name': rom_name,
+                    'score': best_score,
+                    'timestamp': datetime.now()
+                }
+                logger.info(f"Last score updated: {rom_name} - {best_score:,}")
 
-                    # Check for automatic submission
-                    config = self.get_config()
-                    if config['send_mode'] == 'automatic':
-                        logger.info("Automatic mode: Triggering submission in 2 seconds...")
-                        
-                        def auto_submit():
-                            import time
-                            # Small delay to ensure any end-game screen/animations settle
-                            time.sleep(2) 
-                            self.submit_score_with_screenshot()
-                            
-                        threading.Thread(target=auto_submit, daemon=True).start()
+                # Check for automatic submission
+                config = self.get_config()
+                if config['send_mode'] == 'automatic':
+                    logger.info("Automatic mode: Triggering submission in 2 seconds...")
 
-                del self.game_session_data[rom_name]
+                    def auto_submit():
+                        import time
+                        # Small delay to ensure any end-game screen/animations settle
+                        time.sleep(2)
+                        self.submit_score_with_screenshot()
+
+                    threading.Thread(target=auto_submit, daemon=True).start()
+
+            # Clean up session
+            self.game_session_data.pop(rom_name, None)
             return
 
         if msg_type == 'current_scores':
